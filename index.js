@@ -6,32 +6,32 @@ const app = express();
 app.use(express.json());
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const IMGBB_API_KEY = process.env.IMGBB_API_KEY;
+const REPLICATE_API_KEY = process.env.REPLICATE_API_KEY;
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'API is running' });
 });
 
-// Main endpoint: Generate image and return URL
+// Generate caption and image
 app.post('/generate-instagram-image', async (req, res) => {
   try {
-    const { caption } = req.body;
+    const { topic } = req.body;
 
-    if (!caption) {
-      return res.status(400).json({ error: 'Caption is required' });
+    if (!topic) {
+      return res.status(400).json({ error: 'Topic is required' });
     }
 
-    // Step 1: Generate image with Gemini
-    console.log('Generating image with Gemini...');
-    const geminiResponse = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    // Step 1: Generate caption with Gemini
+    console.log('Generating caption with Gemini...');
+    const captionResponse = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         contents: [
           {
             parts: [
               {
-                text: `Create a professional, visually appealing Instagram image for a Salesforce/Tech professional. The image should be 1080x1350 pixels, modern design, tech-focused aesthetic with relevant graphics and colors. Caption: "${caption}"`
+                text: `Generate a professional Instagram caption for a Salesforce/Tech professional about: "${topic}". Include 1-2 emojis and 5-8 hashtags. Keep under 150 characters.`
               }
             ]
           }
@@ -39,36 +39,78 @@ app.post('/generate-instagram-image', async (req, res) => {
       }
     );
 
-    // Extract image data
-    const imageData = geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const caption = captionResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!imageData) {
-      return res.status(500).json({ error: 'Failed to generate image from Gemini' });
+    if (!caption) {
+      return res.status(500).json({ error: 'Failed to generate caption' });
     }
 
-    // Step 2: Upload image to imgbb
-    console.log('Uploading image to imgbb...');
-    const formData = new FormData();
-    formData.append('image', imageData);
-    formData.append('key', IMGBB_API_KEY);
-
-    const imgbbResponse = await axios.post(
-      'https://api.imgbb.com/1/upload',
-      formData
+    // Step 2: Generate image with Replicate (Stable Diffusion)
+    console.log('Generating image with Stable Diffusion...');
+    
+    const predictionResponse = await axios.post(
+      'https://api.replicate.com/v1/predictions',
+      {
+        version: "db21e45d3f7023abc9e53f5b7752271ac8d10aad6882987e88db8e9b5f2b2296",
+        input: {
+          prompt: `Professional Instagram image for Salesforce professional: ${caption}. Modern tech-focused design, professional aesthetic, 1080x1350px, high quality.`
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Token ${REPLICATE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
 
-    const imageUrl = imgbbResponse.data?.data?.url;
+    const predictionId = predictionResponse.data?.id;
 
-    if (!imageUrl) {
-      return res.status(500).json({ error: 'Failed to upload image to imgbb' });
+    if (!predictionId) {
+      return res.status(500).json({ error: 'Failed to start image generation' });
     }
 
-    // Step 3: Return image URL and caption
+    // Step 3: Poll for image completion
+    console.log('Waiting for image generation to complete...');
+    let prediction = predictionResponse.data;
+    let attempts = 0;
+    const maxAttempts = 60; // 60 seconds max wait
+
+    while (prediction.status !== 'succeeded' && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      
+      const statusResponse = await axios.get(
+        `https://api.replicate.com/v1/predictions/${predictionId}`,
+        {
+          headers: {
+            'Authorization': `Token ${REPLICATE_API_KEY}`
+          }
+        }
+      );
+
+      prediction = statusResponse.data;
+      attempts++;
+    }
+
+    if (prediction.status !== 'succeeded') {
+      return res.status(500).json({ 
+        error: 'Image generation timeout',
+        details: prediction.error || 'Generation took too long'
+      });
+    }
+
+    const imageUrl = prediction.output?.[0];
+
+    if (!imageUrl) {
+      return res.status(500).json({ error: 'Failed to get image URL' });
+    }
+
+    // Return success
     res.json({
       success: true,
       imageUrl: imageUrl,
       caption: caption,
-      message: 'Image generated and hosted successfully'
+      message: 'Image and caption generated successfully'
     });
 
   } catch (error) {
