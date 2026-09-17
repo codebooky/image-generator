@@ -1,0 +1,14 @@
+{
+  "name": "instagram-image-generator",
+  "version": "1.0.0",
+  "description": "Generate Instagram images with Gemini and host on imgbb",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.4.0",
+    "dotenv": "^16.0.3"
+  }
+}
